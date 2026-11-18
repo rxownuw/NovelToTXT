@@ -1,11 +1,11 @@
-name: Build BlogToTXT Novel APK
+name: Build NovelToTXT APK
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
     paths:
-      - 'BlogToTXT-Novel-Project.zip'
+      - 'NovelToTXT-Project.zip'
       - '.github/workflows/build-apk.yml'
 
 permissions:
@@ -14,6 +14,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -29,11 +33,27 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # GitHub-hosted Ubuntu runners already include the Android SDK.
+      # Avoid setup-android@v3 here: it may request the obsolete "tools" package.
+      - name: Install required Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager was not found under $ANDROID_HOME/cmdline-tools"
+            exit 1
+          fi
+          echo "Using SDK Manager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Extract project
-        run: unzip -q BlogToTXT-Novel-Project.zip
+        run: unzip -q NovelToTXT-Project.zip
 
       - name: Install dependencies
         working-directory: BlogToTXT-Android
@@ -49,14 +69,17 @@ jobs:
 
       - name: Configure Android and register Download plugin
         working-directory: BlogToTXT-Android
+        shell: bash
         run: |
+          set -euo pipefail
           python3 scripts/install-download-plugin.py
           python3 - <<'PY'
           from pathlib import Path
           p = Path("android/app/src/main/AndroidManifest.xml")
-          s = p.read_text()
-          s = s.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
-          p.write_text(s)
+          s = p.read_text(encoding="utf-8")
+          if 'android:usesCleartextTraffic=' not in s:
+              s = s.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
+          p.write_text(s, encoding="utf-8")
           PY
           npx cap sync android
 
@@ -64,10 +87,13 @@ jobs:
         working-directory: BlogToTXT-Android/android
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Rename APK
+        run: cp BlogToTXT-Android/android/app/build/outputs/apk/debug/app-debug.apk NovelToTXT.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BlogToTXT-Novel-APK
-          path: BlogToTXT-Android/android/app/build/outputs/apk/debug/app-debug.apk
+          name: NovelToTXT-APK
+          path: NovelToTXT.apk
           if-no-files-found: error
           retention-days: 14
